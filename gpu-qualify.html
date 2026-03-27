@@ -1,0 +1,1074 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GPU Demand Qualification</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #0a0a0f;
+    --surface: #13131a;
+    --border: #1e1e2a;
+    --text: #e0e0e8;
+    --text-dim: #6b6b80;
+    --accent: #6366f1;
+    --accent-hover: #818cf8;
+    --accent-glow: rgba(99, 102, 241, 0.15);
+    --green: #22c55e;
+    --chip-bg: #1a1a28;
+    --red: #ef4444;
+    --red-glow: rgba(239, 68, 68, 0.12);
+    --radius: 8px;
+    --font: 'SF Mono', 'Fira Code', 'JetBrains Mono', monospace;
+  }
+
+  body {
+    font-family: var(--font); background: var(--bg); color: var(--text);
+    min-height: 100vh; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; padding: 24px; overflow-x: hidden;
+  }
+
+  .progress-bar {
+    position: fixed; top: 0; left: 0; height: 3px;
+    background: var(--accent); transition: width 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+    z-index: 100; box-shadow: 0 0 12px var(--accent);
+  }
+  .step-counter {
+    position: fixed; top: 20px; right: 28px;
+    font-size: 12px; color: var(--text-dim); letter-spacing: 1px;
+  }
+  .container { max-width: 660px; width: 100%; position: relative; }
+
+  .step {
+    display: none; opacity: 0; transform: translateY(30px);
+    transition: opacity 0.45s ease, transform 0.45s ease;
+  }
+  .step.active { display: block; }
+  .step.visible { opacity: 1; transform: translateY(0); }
+
+  .question-label {
+    font-size: 11px; text-transform: uppercase; letter-spacing: 2px;
+    color: var(--accent); margin-bottom: 12px;
+  }
+  .question-text {
+    font-size: 22px; font-weight: 600; line-height: 1.4; margin-bottom: 28px;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  }
+
+  /* Options (single select vertical) */
+  .options { display: flex; flex-direction: column; gap: 10px; }
+  .option {
+    background: var(--chip-bg); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 14px 18px; cursor: pointer; transition: all 0.2s ease;
+    display: flex; align-items: center; gap: 12px;
+    font-size: 14px; color: var(--text); font-family: var(--font);
+  }
+  .option:hover { border-color: var(--accent); background: var(--accent-glow); }
+  .option.selected { border-color: var(--accent); background: var(--accent-glow); box-shadow: 0 0 0 1px var(--accent); }
+  .option .key {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 24px; height: 24px; border-radius: 4px;
+    background: var(--border); font-size: 11px; color: var(--text-dim);
+    flex-shrink: 0; font-weight: 600;
+  }
+  .option.selected .key { background: var(--accent); color: #fff; }
+
+  /* Chips */
+  .chip-grid { display: flex; flex-wrap: wrap; gap: 10px; }
+  .chip-group-label {
+    font-size: 11px; text-transform: uppercase; letter-spacing: 1.5px;
+    color: var(--text-dim); margin-bottom: 8px; margin-top: 16px;
+  }
+  .chip-group-label:first-child { margin-top: 0; }
+  .chip {
+    background: var(--chip-bg); border: 1px solid var(--border); border-radius: 20px;
+    padding: 8px 16px; cursor: pointer; transition: all 0.2s ease;
+    font-size: 13px; color: var(--text); font-family: var(--font); user-select: none;
+  }
+  .chip:hover { border-color: var(--accent); }
+  .chip.selected { border-color: var(--accent); background: var(--accent); color: #fff; }
+
+  /* Inputs */
+  .input-group { margin-bottom: 18px; }
+  .input-group label {
+    display: block; font-size: 11px; text-transform: uppercase;
+    letter-spacing: 1.5px; color: var(--text-dim); margin-bottom: 8px;
+  }
+  .input-group input, .input-group textarea, .input-group select {
+    width: 100%; background: var(--chip-bg); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 12px 16px; color: var(--text);
+    font-size: 14px; font-family: var(--font); outline: none;
+    transition: border-color 0.2s, box-shadow 0.2s;
+  }
+  .input-group input:focus, .input-group textarea:focus, .input-group select:focus { border-color: var(--accent); }
+  .input-group input::placeholder, .input-group textarea::placeholder { color: var(--text-dim); }
+  .input-group textarea { resize: vertical; min-height: 56px; }
+  .input-group select option { background: var(--surface); color: var(--text); }
+  .input-row { display: flex; gap: 12px; align-items: flex-end; }
+  .input-row .input-group { flex: 1; margin-bottom: 0; }
+
+  /* Validation */
+  .field-error input, .field-error textarea, .field-error select {
+    border-color: var(--red) !important; box-shadow: 0 0 0 1px var(--red), 0 0 8px var(--red-glow) !important;
+  }
+  .error-msg { font-size: 11px; color: var(--red); margin-top: 6px; display: none; }
+  .field-error .error-msg { display: block; }
+  .highlight-error { outline: 1px solid var(--red) !important; outline-offset: 4px !important; border-radius: var(--radius); }
+
+  /* Buttons */
+  .nav-row { display: flex; align-items: center; justify-content: space-between; margin-top: 32px; }
+  .btn {
+    font-family: var(--font); font-size: 13px; padding: 10px 22px;
+    border-radius: var(--radius); cursor: pointer; transition: all 0.2s; border: none; font-weight: 600;
+  }
+  .btn-primary { background: var(--accent); color: #fff; }
+  .btn-primary:hover { background: var(--accent-hover); }
+  .btn-primary:disabled { opacity: 0.35; cursor: not-allowed; }
+  .btn-secondary { background: transparent; color: var(--text-dim); border: 1px solid var(--border); }
+  .btn-secondary:hover { color: var(--text); border-color: var(--text-dim); }
+  .btn-skip { background: transparent; color: var(--text-dim); border: none; text-decoration: underline; font-size: 12px; }
+  .btn-skip:hover { color: var(--text); }
+  .btn-ghost {
+    background: transparent; color: var(--accent); border: 1px solid var(--accent);
+    margin-left: 12px;
+  }
+  .btn-ghost:hover { background: var(--accent-glow); }
+
+  .hint { font-size: 11px; color: var(--text-dim); margin-top: 16px; letter-spacing: 0.5px; }
+  .hint kbd { background: var(--border); padding: 2px 6px; border-radius: 3px; font-size: 10px; }
+
+  /* Success */
+  .success-icon {
+    width: 64px; height: 64px; border-radius: 50%;
+    background: var(--accent-glow); border: 2px solid var(--green);
+    display: flex; align-items: center; justify-content: center;
+    margin-bottom: 24px; font-size: 28px;
+  }
+  .success-title { font-size: 22px; font-weight: 600; margin-bottom: 12px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+  .success-sub { color: var(--text-dim); font-size: 14px; line-height: 1.6; margin-bottom: 24px; }
+  .success-actions { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
+
+  /* Advanced expand */
+  .expand-toggle {
+    display: flex; align-items: center; gap: 8px; cursor: pointer;
+    color: var(--accent); font-size: 13px; font-family: var(--font);
+    background: none; border: none; margin-top: 4px; transition: color 0.2s;
+  }
+  .expand-toggle:hover { color: var(--accent-hover); }
+  .expand-toggle .arrow { transition: transform 0.3s; display: inline-block; }
+  .expand-toggle.open .arrow { transform: rotate(90deg); }
+  .advanced-panel { max-height: 0; overflow: hidden; transition: max-height 0.4s ease; }
+  .advanced-panel.open { max-height: 800px; }
+  .advanced-inner { padding-top: 20px; }
+
+  /* Sub-questions */
+  .sub-question {
+    opacity: 0; transform: translateY(15px);
+    transition: opacity 0.35s ease, transform 0.35s ease; margin-top: 24px;
+  }
+  .sub-question.visible { opacity: 1; transform: translateY(0); }
+
+  /* Budget toggle */
+  .budget-toggle { display: flex; gap: 0; margin-bottom: 24px; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+  .budget-toggle-btn {
+    flex: 1; padding: 10px 16px; background: var(--chip-bg); color: var(--text-dim);
+    border: none; font-family: var(--font); font-size: 12px; cursor: pointer;
+    transition: all 0.2s; text-transform: uppercase; letter-spacing: 1px;
+  }
+  .budget-toggle-btn.active { background: var(--accent); color: #fff; }
+  .budget-toggle-btn:not(.active):hover { background: var(--accent-glow); color: var(--text); }
+  .budget-panel { display: none; }
+  .budget-panel.active { display: block; }
+
+  /* Sliders */
+  .slider-group { margin-bottom: 20px; }
+  .slider-group label {
+    display: flex; justify-content: space-between; align-items: baseline;
+    font-size: 11px; text-transform: uppercase; letter-spacing: 1.5px;
+    color: var(--text-dim); margin-bottom: 12px;
+  }
+  .slider-value {
+    font-size: 18px; font-weight: 700; color: var(--accent);
+    letter-spacing: 0; text-transform: none;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  }
+
+  input[type="range"] {
+    -webkit-appearance: none; appearance: none;
+    width: 100%; height: 6px; border-radius: 3px;
+    background: var(--border); outline: none; cursor: pointer;
+  }
+  input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none; appearance: none;
+    width: 22px; height: 22px; border-radius: 50%;
+    background: var(--accent); border: 2px solid var(--bg);
+    box-shadow: 0 0 0 2px var(--accent), 0 0 12px var(--accent-glow);
+    cursor: grab; transition: box-shadow 0.2s;
+  }
+  input[type="range"]::-webkit-slider-thumb:hover {
+    box-shadow: 0 0 0 3px var(--accent-hover), 0 0 16px rgba(99,102,241,0.3);
+  }
+  input[type="range"]::-moz-range-thumb {
+    width: 22px; height: 22px; border-radius: 50%;
+    background: var(--accent); border: 2px solid var(--bg);
+    box-shadow: 0 0 0 2px var(--accent), 0 0 12px var(--accent-glow); cursor: grab;
+  }
+  input[type="range"]::-moz-range-track { height: 6px; border-radius: 3px; background: var(--border); }
+
+  .dual-range {
+    position: relative; height: 6px; background: var(--border);
+    border-radius: 3px; margin: 16px 0 8px 0;
+  }
+  .dual-range .track-fill {
+    position: absolute; height: 100%; background
+: var(--accent);
+    border-radius: 3px; pointer-events: none;
+  }
+  .dual-range input[type="range"] {
+    position: absolute; top: -8px; left: 0; width: 100%;
+    height: 22px; background: transparent; pointer-events: none; margin: 0; padding: 0;
+  }
+  .dual-range input[type="range"]::-webkit-slider-thumb { pointer-events: auto; }
+  .dual-range input[type="range"]::-moz-range-thumb { pointer-events: auto; }
+  .dual-range-labels {
+    display: flex; justify-content: space-between;
+    font-size: 11px; color: var(--text-dim); margin-top: 4px;
+  }
+  .price-display { text-align: center; margin-bottom: 12px; }
+  .price-display .slider-value { font-size: 20px; }
+
+  /* Toggle switch */
+  .toggle-row {
+    display: flex; align-items: center; gap: 12px; margin-top: 16px; margin-bottom: 8px;
+    cursor: pointer; user-select: none;
+  }
+  .toggle-row span { font-size: 13px; color: var(--text); }
+  .toggle-switch {
+    position: relative; width: 40px; height: 22px;
+    background: var(--border); border-radius: 11px;
+    transition: background 0.2s; flex-shrink: 0;
+  }
+  .toggle-switch::after {
+    content: ''; position: absolute; top: 3px; left: 3px;
+    width: 16px; height: 16px; border-radius: 50%;
+    background: var(--text-dim); transition: all 0.2s;
+  }
+  .toggle-row.active .toggle-switch { background: var(--accent); }
+  .toggle-row.active .toggle-switch::after { left: 21px; background: #fff; }
+
+  /* On behalf panel */
+  .behalf-panel { max-height: 0; overflow: hidden; transition: max-height 0.3s ease; margin-top: 0; }
+  .behalf-panel.open { max-height: 300px; margin-top: 16px; }
+</style>
+</head>
+<body>
+
+<div class="progress-bar" id="progressBar"></div>
+<div class="step-counter" id="stepCounter"></div>
+
+<div class="container" id="container">
+
+  <!-- STEP 1: Product Type -->
+  <div class="step" id="step-1" data-step="1">
+    <div class="question-label">Product Type</div>
+    <div class="question-text">What are you looking for?</div>
+    <div class="options" id="productOptions">
+      <div class="option" data-value="bare-metal" onclick="selectOption(this, 'product_type')"><span class="key">A</span> Bare Metal</div>
+      <div class="option" data-value="vm" onclick="selectOption(this, 'product_type')"><span class="key">B</span> Virtual Machines</div>
+      <div class="option" data-value="kubernetes" onclick="selectOption(this, 'product_type')"><span class="key">C</span> Kubernetes (managed cluster)</div>
+      <div class="option" data-value="inference" onclick="selectOption(this, 'product_type')"><span class="key">D</span> Inference Endpoint</div>
+      <div class="option" data-value="model-on-demand" onclick="selectOption(this, 'product_type')"><span class="key">E</span> Model on Demand (hosted API)</div>
+    </div>
+    <div class="hint">Press <kbd>A</kbd>â<kbd>E</kbd> to select &middot; <kbd>Enter</kbd> to continue</div>
+    <div class="nav-row">
+      <span></span>
+      <button class="btn btn-primary" id="btn-next-1" disabled onclick="nextStep()">Continue &rarr;</button>
+    </div>
+  </div>
+
+  <!-- STEP 2: GPU (hardware path) â SINGLE SELECT -->
+  <div class="step" id="step-2-gpu" data-step="2">
+    <div class="question-label">GPU Model</div>
+    <div class="question-text">Which GPU do you need?</div>
+
+    <div class="chip-group-label">NVIDIA â Latest / Frontier</div>
+    <div class="chip-grid" id="gpuChipGrid">
+      <div class="chip" data-value="GB300" onclick="selectGpu(this)">GB300</div>
+      <div class="chip" data-value="GB200 NVL72" onclick="selectGpu(this)">GB200 NVL72</div>
+      <div class="chip" data-value="GB200" onclick="selectGpu(this)">GB200</div>
+      <div class="chip" data-value="B300" onclick="selectGpu(this)">B300</div>
+      <div class="chip" data-value="B200" onclick="selectGpu(this)">B200</div>
+      <div class="chip" data-value="B100" onclick="selectGpu(this)">B100</div>
+    </div>
+
+    <div class="chip-group-label">NVIDIA â Data Center (current gen)</div>
+    <div class="chip-grid">
+      <div class="chip" data-value="H200" onclick="selectGpu(this)">H200</div>
+      <div class="chip" data-value="H100 SXM" onclick="selectGpu(this)">H100 SXM</div>
+      <div class="chip" data-value="H100 PCIe" onclick="selectGpu(this)">H100 PCIe</div>
+      <div class="chip" data-value="L40S" onclick="selectGpu(this)">L40S</div>
+      <div class="chip" data-value="L40" onclick="selectGpu(this)">L40</div>
+      <div class="chip" data-value="L4" onclick="selectGpu(this)">L4</div>
+    </div>
+
+    <div class="chip-group-label">NVIDIA â Data Center (prev gen)</div>
+    <div class="chip-grid">
+      <div class="chip" data-value="A100 80GB" onclick="selectGpu(this)">A100 80GB</div>
+      <div class="chip" data-value="A100 40GB" onclick="selectGpu(this)">A100 40GB</div>
+      <div class="chip" data-value="A10G" onclick="selectGpu(this)">A10G</div>
+      <div class="chip" data-value="A10" onclick="selectGpu(this)">A10</div>
+      <div class="chip" data-value="V100" onclick="selectGpu(this)">V100</div>
+      <div class="chip" data-value="T4" onclick="selectGpu(this)">T4</div>
+    </div>
+
+    <div class="chip-group-label">NVIDIA â Consumer / Pro</div>
+    <div class="chip-grid">
+      <div class="chip" data-value="RTX 5090" onclick="selectGpu(this)">RTX 5090</div>
+      <div class="chip" data-value="RTX 4090" onclick="selectGpu(this)">RTX 4090</div>
+      <div class="chip" data-value="RTX 6000 Ada" onclick="selectGpu(this)">RTX 6000 Ada</div>
+      <div class="chip" data-value="RTX 4000 Ada" onclick="selectGpu(this)">RTX 4000 Ada</div>
+    </div>
+
+    <div class="chip-group-label">AMD</div>
+    <div class="chip-grid">
+      <div class="chip" data-value="MI350X" onclick="selectGpu(this)">MI350X</div>
+      <div class="chip" data-value="MI325X" onclick="selectGpu(this)">MI325X</div>
+      <div class="chip" data-value="MI300X" onclick="selectGpu(this)">MI300X</div>
+      <div class="chip" data-value="MI300A" onclick="selectGpu(this)">MI300A</div>
+      <div class="chip" data-value="MI250X" onclick="selectGpu(this)">MI250X</div>
+    </div>
+
+    <div class="chip-group-label">Intel</div>
+    <div class="chip-grid">
+      <div class="chip" data-value="Gaudi 3" onclick="selectGpu(this)">Gaudi 3</div>
+      <div class="chip" data-value="Gaudi 2" onclick="selectGpu(this)">Gaudi 2</div>
+      <div class="chip" data-value="Max 1550" onclick="selectGpu(this)">Max 1550</div>
+    </div>
+
+    <div class="chip-grid" style="margin-top: 12px;">
+      <div class="chip" data-value="not-sure" onclick="selectGpu(this)" style="border-style: dashed;">Not sure â help me size it</div>
+    </div>
+
+    <!-- Cluster sizing: dual sliders for node range + GPUs/node -->
+    <div class="sub-question" id="nodeCountSub">
+      <div class="question-label">Cluster Size</div>
+
+      <div class="slider-group">
+        <label>Node range <span class="slider-value" id="nodeRangeDisplay">1 â 4</span></label>
+        <div class="dual-range" id="nodeRange">
+          <div class="track-fill" id="nodeTrackFill"></div>
+          <input type="range" id="nodeMin" min="1" max="240" value="1" oninput="onNodeRange()">
+          <input type="range" id="nodeMax" min="1" max="240" value="4" oninput="onNodeRange()">
+        </div>
+        <div class="dual-range-labels"><span>1</span><span>240</span></div>
+      </div>
+
+      <div class="slider-group" id="field-gpus-per-node">
+        <label>GPUs per node <span class="slider-value" id="gpuPerNodeValue">8</span></label>
+        <input type="range" id="gpuPerNodeSlider" min="1" max="16" value="8" oninput="onGpuPerNodeSlider(this)">
+      </div>
+
+      <div style="font-size:13px; color: var(--text-dim); margin-top: 4px;">
+        Total GPUs: <strong style="color: var(--accent);" id="totalGpuCount">8 â 32</strong>
+      </div>
+    </div>
+
+    <!-- Special requirements -->
+    <div class="sub-question" id="specialReqSub">
+      <div class="input-group">
+        <label>Special requirements <span style="color:var(--text-dim)">(optional)</span></label>
+        <textarea id="inputSpecialReq" placeholder="e.g. TDX enabled, CVM enabled, NVLink required, specific CUDA version..." rows="2" oninput="data.special_requirements=this.value.trim()||null"></textarea>
+      </div>
+    </div>
+
+    <div class="nav-row">
+      <button class="btn btn-secondary" onclick="prevStep()">&larr; Back</button>
+      <button class="btn btn-primary" id="btn-next-2gpu" onclick="validateAndNext('step-2-gpu')">Continue &rarr;</button>
+    </div>
+  </div>
+
+  <!-- STEP 2: Model (inference/MoD path) -->
+  <div class="step" id="step-2-model" data-step="2">
+    <div class="question-label">Model Requirements</div>
+    <div class="question-text">What model are you running?</div>
+    <div class="options" id="modelOptions">
+      <div class="option" data-value="llama" onclick="selectOption(this, 'model_name')"><span class="key">A</span> Llama 3 / 3.1 / 4</div>
+      <div class="option" data-value="mixtral" onclick="selectOption(this, 'model_name')"><span class="key">B</span> Mixtral / Mistral</div>
+      <div class="option" data-value="deepseek" onclick="selectOption(this, 'model_name')"><span class="key">C</span> DeepSeek</div>
+      <div class="option" data-value="custom-finetune" onclick="selectOption(this, 'model_name')"><span class="key">D</span> Custom fine-tune / other</div>
+    </div>
+
+    <div class="sub-question" id="scaleSub">
+      <div class="question-label" id="scaleLabel">Scale</div>
+      <div class="question-text" style="font-size:18px;" id="scaleQuestion">Expected requests/sec?</div>
+      <div class="chip-grid" id="scalePicks">
+        <div class="chip" data-value="<10" onclick="selectScaleChip(this)">&lt;10</div>
+        <div class="chip" data-value="10-100" onclick="selectScaleChip(this)">10â100</div>
+        <div class="chip" data-value="100-1000" onclick="selectScaleChip(this)">100â1K</div>
+        <div class="chip" data-value="1000+" onclick="selectScaleChip(this)">1K+</div>
+      </div>
+    </div>
+
+    <div class="nav-row">
+      <button class="btn btn-secondary" onclick="prevStep()">&larr; Back</button>
+      <button class="btn btn-primary" id="btn-next-2model" disabled onclick="nextStep()">Continue &rarr;</button>
+    </div>
+  </div>
+
+  <!-- STEP 3: Timeline -->
+  <div class="step" id="step-3" data-step="3">
+    <div class="question-label">Timeline</div>
+    <div class="question-text">When do you need this?</div>
+    <div class="options" id="timelineOptions">
+      <div class="option" data-value="48h" onclick="selectOption(this, 'timeline')"><span class="key">A</span> Now (within 48 hours)</div>
+      <div class="option" data-value="this-week" onclick="selectOption(this, 'timeline')"><span class="key">B</span> This week</div>
+      <div class="option" data-value="this-month" onclick="selectOption(this, 'timeline')"><span class="key">C</span> This month</div>
+      <div class="option" data-value="1-3-months" onclick="selectOption(this, 'timeline')"><span class="key">D</span> Planning ahead (1â3 months)</div>
+    </div>
+    <div class="hint">Press <kbd>A</kbd>â<kbd>D</kbd> to select</div>
+    <div class="nav-row">
+      <button class="btn btn-secondary" onclick="prevStep()">&larr; Back</button>
+      <button class="btn btn-primary" id="btn-next-3" disabled onclick="nextStep()">Continue &rarr;</button>
+    </div>
+  </div>
+
+  <!-- STEP 4: Budget + Contract Length -->
+  <div class="step" id="step-4" data-step="4">
+    <div class="question-label">Budget</div>
+    <div class="question-text">What's your budget?</div>
+
+    <div class="budget-toggle">
+      <button class="budget-toggle-btn active" id="budgetToggleRate" onclick="switchBudgetMode('rate')">$/GPU/hour</button>
+      <button class="budget-toggle-btn" id="budgetToggleTotal" onclick="switchBudgetMode('total')">Total value</button>
+      <button class="budget-toggle-btn" id="budgetToggleSkip" onclick="switchBudgetMode('undisclosed')">Prefer not to say</button>
+    </div>
+
+    <!-- Rate mode: dual range -->
+    <div class="budget-panel active" id="budgetPanelRate">
+      <div class="price-display">
+        <span class="slider-value" id="priceRangeDisplay">$2.00 â $5.00</span>
+        <span style="font-size:11px; color:var(--text-dim);"> /GPU/hour</span>
+      </div>
+      <div class="dual-range" id="dualRange">
+        <div class="track-fill" id="trackFill"></div>
+        <input type="range" id="priceMin" min="0" max="100" value="50" oninput="onPriceSlider()">
+        <input type="range" id="priceMax" min="0" max="100" value="80" oninput="onPriceSlider()">
+      </div>
+      <div class="dual-range-labels"><span>$0</span><span>$10+</span></div>
+    </div>
+
+    <!-- Total mode -->
+    <div class="budget-panel" id="budgetPanelTotal">
+      <div class="input-row">
+        <div class="input-group" style="flex:2;" id="field-budget-total">
+          <label>Total monthly value</label>
+          <input type="number" id="budgetTotalAmount" placeholder="e.g. 25000" oninput="onBudgetTotalInput()">
+          <div class="error-msg">Enter a budget amount</div>
+        </div>
+        <div class="input-group" style="flex:1;">
+          <label>Currency</label>
+          <select id="budgetTotalCurrency" onchange="onBudgetTotalInput()">
+            <option value="USD">USD</option>
+            <option value="EUR">EUR</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <!-- Skip mode -->
+    <div class="budget-panel" id="budgetPanelSkip">
+      <div style="color: var(--text-dim); font-size: 13px; padding: 12px 0;">No problem â we'll discuss pricing later.</div>
+    </div>
+
+    <!-- Contract length slider -->
+    <div style="margin-top: 28px;">
+      <div class="slider-group">
+        <label>Estimated contract length <span class="slider-value" id="contractLengthDisplay">12 months</span></label>
+        <input type="range" id="contractSlider" min="1" max="36" value="12" oninput="onContractSlider()">
+        <div class="dual-range-labels"><span>1 mo</span><span>3 years</span></div>
+      </div>
+
+      <div class="toggle-row" id="extensionToggle" onclick="toggleExtension()">
+        <div class="toggle-switch"></div>
+        <span>Potential extension required</span>
+      </div>
+    </div>
+
+    <div class="nav-row">
+      <button class="btn btn-secondary" onclick="prevStep()">&larr; Back</button>
+      <button class="btn btn-primary" id="btn-next-4" onclick="validateAndNext('step-4')">Continue &rarr;</button>
+    </div>
+  </div>
+
+  <!-- STEP 5: Geography & Compliance -->
+  <div class="step" id="step-5" data-step="5">
+    <div class="question-label">Geography &amp; Compliance</div>
+    <div class="question-text">Any region or compliance requirements?</div>
+
+    <div class="chip-group-label">Region</div>
+    <div class="chip-grid" id="regionChips">
+      <div class="chip" data-value="us" onclick="toggleChip(this, 'region')">US</div>
+      <div class="chip" data-value="eu" onclick="toggleChip(this, 'region')">EU</div>
+      <div class="chip" data-value="apac" onclick="toggleChip(this, 'region')">APAC</div>
+      <div class="chip" data-value="no-pref" onclick="toggleChip(this, 'region')">No preference</div>
+    </div>
+
+    <div class="input-group" style="margin-top: 16px;">
+      <label>Specific country <span style="color:var(--text-dim)">(optional)</span></label>
+      <input type="text" id="inputCountry" placeholder="e.g. Germany, Singapore, US-East (Virginia)..." oninput="data.country_specific=this.value.trim()||null">
+    </div>
+
+    <div class="chip-group-label">Compliance</div>
+    <div class="chip-grid" id="complianceChips">
+      <div class="chip" data-value="iso27001" onclick="toggleChip(this, 'compliance')">ISO 27001</div>
+      <div class="chip" data-value="soc2" onclick="toggleChip(this, 'compliance')">SOC 2</div>
+      <div class="chip" data-value="gdpr" onclick="toggleChip(this, 'compliance')">GDPR</div>
+      <div class="chip" data-value="hipaa" onclick="toggleChip(this, 'compliance')">HIPAA</div>
+      <div class="chip" data-value="none" onclick="toggleChip(this, 'compliance')">None</div>
+    </div>
+
+    <div class="nav-row">
+      <button class="btn btn-secondary" onclick="prevStep()">&larr; Back</button>
+      <button class="btn btn-primary" id="btn-next-5" onclick="nextStep()">Continue &rarr;</button>
+    </div>
+  </div>
+
+  <!-- STEP 6: Advanced Requirements (optional) -->
+  <div class="step" id="step-6" data-step="6">
+    <div class="question-label">Advanced Requirements</div>
+    <div class="question-text">Any specific terms or requirements?</div>
+
+    <button class="expand-toggle" id="advancedToggle" onclick="toggleAdvanced()">
+      <span class="arrow">&#9654;</span> Yes, let me specify
+    </button>
+
+    <div class="advanced-panel" id="advancedPanel">
+      <div class="advanced-inner">
+        <div class="chip-group-label">SLA &amp; Uptime</div>
+        <div class="chip-grid">
+          <div class="chip" data-value="best-effort" onclick="toggleChip(this, 'sla')">Best effort</div>
+          <div class="chip" data-value="99.9" onclick="toggleChip(this, 'sla')">99.9%</div>
+          <div class="chip" data-value="99.99" onclick="toggleChip(this, 'sla')">99.99%</div>
+        </div>
+
+        <div class="chip-group-label">Networking</div>
+        <div class="chip-grid">
+          <div class="chip" data-value="standard" onclick="toggleChip(this, 'networking')">Standard</div>
+          <div class="chip" data-value="infiniband" onclick="toggleChip(this, 'networking')">InfiniBand / HBI</div>
+          <div class="chip" data-value="private" onclick="toggleChip(this, 'networking')">Private / Dedicated</div>
+        </div>
+
+        <div class="chip-group-label">Other</div>
+        <div class="chip-grid">
+          <div class="chip" data-value="preemptible" onclick="toggleChip(this, 'other')">Preemptible OK</div>
+          <div class="chip" data-value="multi-cloud" onclick="toggleChip(this, 'other')">Multi-cloud / Hybrid</div>
+          <div class="chip" data-value="managed-support" onclick="toggleChip(this, 'other')">Managed support</div>
+          <div class="chip" data-value="custom-image" onclick="toggleChip(this, 'other')">Custom image / OS</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="nav-row">
+      <button class="btn btn-secondary" onclick="prevStep()">&larr; Back</button>
+      <div>
+        <button class="btn btn-skip" onclick="skipAdvanced()">Skip &rarr;</button>
+        <button class="btn btn-primary" onclick="nextStep()">Continue &rarr;</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- STEP 7: Contact -->
+  <div class="step" id="step-7" data-step="7">
+    <div class="question-label">Contact</div>
+    <div class="question-text">Last step â who is this for?</div>
+
+    <!-- On-behalf toggle -->
+    <div class="toggle-row" id="behalfToggle" onclick="toggleBehalf()">
+      <div class="toggle-switch"></div>
+      <span>I'm submitting on behalf of a customer (ICN/IC employee)</span>
+    </div>
+
+    <div class="behalf-panel" id="behalfPanel">
+      <div class="input-group" id="field-submitter-name">
+        <label>Your name (submitter)</label>
+        <input type="text" id="inputSubmitterName" placeholder="Your name" oninput="validateContact()">
+        <div class="error-msg">Submitter name is required</div>
+      </div>
+      <div class="input-group" id="field-submitter-email">
+        <label>Your email (submitter)</label>
+        <input type="email" id="inputSubmitterEmail" placeholder="you@icn.com" oninput="validateContact()">
+        <div class="error-msg">Valid submitter email is required</div>
+      </div>
+    </div>
+
+    <div style="margin-top: 16px;">
+      <div class="input-group" id="field-name">
+        <label id="labelName">Name</label>
+        <input type="text" id="inputName" placeholder="Jane Doe" oninput="validateContact()">
+        <div class="error-msg">Name is required</div>
+      </div>
+      <div class="input-group" id="field-company">
+        <label>Company</label>
+        <input type="text" id="inputCompany" placeholder="Acme Corp" oninput="validateContact()">
+        <div class="error-msg">Company name is required</div>
+      </div>
+      <div class="input-group" id="field-email">
+        <label id="labelEmail">Work Email</label>
+        <input type="email" id="inputEmail" placeholder="you@company.com" oninput="validateContact()">
+        <div class="error-msg">Valid work email is required</div>
+      </div>
+      <div class="input-group">
+        <label>Phone <span style="color:var(--text-dim)">(optional)</span></label>
+        <input type="tel" id="inputPhone" placeholder="+1 555 123 4567">
+      </div>
+      <div class="input-group">
+        <label>Anything else? <span style="color:var(--text-dim)">(optional)</span></label>
+        <textarea id="inputNotes" placeholder="Additional context, timeline constraints, etc." rows="2"></textarea>
+      </div>
+    </div>
+
+    <div class="nav-row">
+      <button class="btn btn-secondary" onclick="prevStep()">&larr; Back</button>
+      <button class="btn btn-primary" id="btn-submit" onclick="validateAndSubmit()">Submit &rarr;</button>
+    </div>
+  </div>
+
+  <!-- SUCCESS -->
+  <div class="step" id="step-success">
+    <div class="success-icon">&#10003;</div>
+    <div class="success-title">Request received.</div>
+    <div class="success-sub">We'll match your requirements against available GPU inventory and get back to you within 24 hours.</div>
+    <div class="success-actions">
+      <button class="btn btn-primary" onclick="downloadJSON()">Download JSON &darr;</button>
+      <button class="btn btn-ghost" onclick="submitAnother()">Submit another deal &plus;</button>
+    </div>
+    <div class="hint">Lead ID: <code id="leadId"></code></div>
+    <div id="dealCounter" style="font-size:11px; color:var(--text-dim); margin-top:8px;"></div>
+  </div>
+
+</div>
+
+<script>
+// âââ State âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+const allDeals = []; // accumulates submitted deals
+
+function freshData() {
+  return {
+    product_type: null,
+    gpu_model: null,
+    node_min: 1,
+    node_max: 4,
+    gpus_per_node: 8,
+    special_requirements: null,
+    model_name: null,
+    scale: null,
+    timeline: null,
+    budget_mode: 'rate',
+    budget_rate_min: 2.00,
+    budget_rate_max: 5.00,
+    budget_total_amount: null,
+    budget_total_currency: 'USD',
+    contract_months: 12,
+    extension_required: false,
+    region: [],
+    country_specific: null,
+    compliance: [],
+    sla: [],
+    networking: [],
+    other: [],
+    submitted_on_behalf: false,
+    submitter_name: null,
+    submitter_email: null,
+    name: null,
+    company: null,
+    email: null,
+    phone: null,
+    notes: null,
+    lead_id: null,
+    submitted_at: null
+  };
+}
+
+let data = freshData();
+const TOTAL_STEPS = 7;
+let currentStep = 1;
+let stepHistory = [1];
+
+// âââ GPU single-select âââââââââââââââââââââââââââââââââââââââââââââââ
+function selectGpu(el) {
+  // Deselect all GPU chips across all grids in this step
+  const step = el.closest('.step');
+  step.querySelectorAll('.chip').forEach(c => c.classList.remove('selected'));
+  el.classList.add('selected');
+  data.gpu_model = el.dataset.value;
+
+  // Show sub-questions
+  setTimeout(() => {
+    document.getElementById('nodeCountSub').classList.add('visible');
+    document.getElementById('specialReqSub').classList.add('visible');
+  }, 100);
+}
+
+// âââ Scale single-select for inference path ââââââââââââââââââââââââââ
+function selectScaleChip(el) {
+  el.parentElement.querySelectorAll('.chip').forEach(c => c.classList.remove('selected'));
+  el.classList.add('selected');
+  data.scale = el.dataset.value;
+  const btn = el.closest('.step').querySelector('.btn-primary');
+  if (btn) btn.disabled = false;
+}
+
+// âââ Node range slider ââââââââââââââââââââââââââââââââââââââââââââââ
+function onNodeRange() {
+  let minV = parseInt(document.getElementById('nodeMin').value);
+  let maxV = parseInt(document.getElementById('nodeMax').value);
+  if (minV > maxV) { const t = minV; minV = maxV; maxV = t; document.getElementById('nodeMin').value = minV; document.getElementById('nodeMax').value = maxV; }
+  data.node_min = minV;
+  data.node_max = maxV;
+  document.getElementById('nodeRangeDisplay').textContent = minV === maxV ? minV : `${minV} â ${maxV}`;
+  // Track fill
+  const pctL = ((minV - 1) / 239) * 100;
+  const pctR = ((maxV - 1) / 239) * 100;
+  document.getElementById('nodeTrackFill').style.left = pctL + '%';
+  document.getElementById('nodeTrackFill').style.width = (pctR - pctL) + '%';
+  updateTotalGpus();
+}
+
+function onGpuPerNodeSlider(el) {
+  data.gpus_per_node = parseInt(el.value);
+  document.getElementById('gpuPerNodeValue').textContent = data.gpus_per_node;
+  updateTotalGpus();
+}
+
+function updateTotalGpus() {
+  const lo = data.node_min * data.gpus_per_node;
+  const hi = data.node_max * data.gpus_per_node;
+  document.getElementById('totalGpuCount').textContent = lo === hi ? lo.toLocaleString() : `${lo.toLocaleString()} â ${hi.toLocaleString()}`;
+}
+
+// âââ Price slider mapping ââââââââââââââââââââââââââââââââââââââââââââ
+function sliderToPrice(val) {
+  if (val <= 50) return (val / 50) * 2;
+  if (val <= 80) return 2 + ((val - 50) / 30) * 3;
+  return 5 + ((val - 80) / 20) * 5;
+}
+function formatPrice(p) { return p >= 10 ? '$10+' : '$' + p.toFixed(2); }
+
+function onPriceSlider() {
+  let minVal = parseInt(document.getElementById('priceMin').value);
+  let maxVal = parseInt(document.getElementById('priceMax').value);
+  if (minVal > maxVal - 2) { minVal = maxVal - 2; document.getElementById('priceMin').value = minVal; }
+  data.budget_rate_min = Math.round(sliderToPrice(minVal) * 100) / 100;
+  data.budget_rate_max = Math.round(sliderToPrice(maxVal) * 100) / 100;
+  document.getElementById('priceRangeDisplay').textContent = formatPrice(sliderToPrice(minVal)) + ' â ' + formatPrice(sliderToPrice(maxVal));
+  document.getElementById('trackFill').style.left = minVal + '%';
+  document.getElementById('trackFill').style.width = (maxVal - minVal) + '%';
+}
+
+// âââ Contract slider âââââââââââââââââââââââââââââââââââââââââââââââââ
+function onContractSlider() {
+  const v = parseInt(document.getElementById('contractSlider').value);
+  data.contract_months = v;
+  let label;
+  if (v < 12) label = v + (v === 1 ? ' month' : ' months');
+  else if (v % 12 === 0) label = (v / 12) + (v === 12 ? ' year' : ' years');
+  else label = Math.floor(v / 12) + 'y ' + (v % 12) + 'mo';
+  document.getElementById('contractLengthDisplay').textContent = label;
+}
+
+function toggleExtension() {
+  const row = document.getElementById('extensionToggle');
+  row.classList.toggle('active');
+  data.extension_required = row.classList.contains('active');
+}
+
+// âââ On-behalf toggle ââââââââââââââââââââââââââââââââââââââââââââââââ
+function toggleBehalf() {
+  const row = document.getElementById('behalfToggle');
+  const panel = document.getElementById('behalfPanel');
+  row.classList.toggle('active');
+  panel.classList.toggle('open');
+  data.submitted_on_behalf = row.classList.contains('active');
+
+  // Update labels for customer fields
+  const isOnBehalf = data.submitted_on_behalf;
+  document.getElementById('labelName').textContent = isOnBehalf ? 'Customer name' : 'Name';
+  document.getElementById('labelEmail').textContent = isOnBehalf ? 'Customer work email' : 'Work email';
+}
+
+// âââ Step Flow âââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+function getStepId(step) {
+  if (step === 2) {
+    const pt = data.product_type;
+    return (pt === 'inference' || pt === 'model-on-demand') ? 'step-2-model' : 'step-2-gpu';
+  }
+  if (step === 'success') return 'step-success';
+  return `step-${step}`;
+}
+
+function showStep(step) {
+  document.querySelectorAll('.step').forEach(s => s.classList.remove('active', 'visible'));
+  const el = document.getElementById(getStepId(step));
+  el.classList.add('active');
+  requestAnimationFrame(() => requestAnimationFrame(() => el.classList.add('visible')));
+
+  const pct = step === 'success' ? 100 : ((step - 1) / TOTAL_STEPS) * 100;
+  document.getElementById('progressBar').style.width = pct + '%';
+  document.getElementById('stepCounter').textContent = step !== 'success' ? `${step} / ${TOTAL_STEPS}` : '';
+
+  if (step === 2 && data.product_type === 'model-on-demand') {
+    document.getElementById('scaleLabel').textContent = 'Scale';
+    document.getElementById('scaleQuestion').textContent = 'Expected tokens/day?';
+    const picks = document.getElementById('scalePicks');
+    picks.innerHTML = '';
+    ['<100K', '100Kâ1M', '1Mâ10M', '10M+'].forEach(v => {
+      const d = document.createElement('div');
+      d.className = 'chip'; d.dataset.value = v; d.textContent = v;
+      d.onclick = function() { selectScaleChip(this); };
+      picks.appendChild(d);
+    });
+  }
+
+  if (step === 2 && !(data.product_type === 'inference' || data.product_type === 'model-on-demand')) {
+    if (data.gpu_model) {
+      setTimeout(() => {
+        document.getElementById('nodeCountSub').classList.add('visible');
+        document.getElementById('specialReqSub').classList.add('visible');
+      }, 100);
+    }
+  }
+
+  if (step === 4) { onPriceSlider(); onContractSlider(); }
+  if (step === 2) { onNodeRange(); }
+
+  currentStep = step;
+}
+
+function nextStep() {
+  if (currentStep === 7) { validateAndSubmit(); return; }
+  const next = (typeof currentStep === 'number') ? currentStep + 1 : currentStep;
+  stepHistory.push(next);
+  showStep(next);
+}
+
+function prevStep() {
+  if (stepHistory.length > 1) { stepHistory.pop(); showStep(stepHistory[stepHistory.length - 1]); }
+}
+
+// âââ Validation ââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+function flashError(el) {
+  el.classList.add('highlight-error');
+  setTimeout(() => el.classList.remove('highlight-error'), 2000);
+}
+
+function setFieldError(id, hasError) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  if (hasError) el.classList.add('field-error');
+  else el.classList.remove('field-error');
+}
+
+function validateAndNext(stepId) {
+  let valid = true;
+  if (stepId === 'step-2-gpu') {
+    if (!data.gpu_model) {
+      valid = false;
+      document.querySelectorAll('#step-2-gpu .chip-grid').forEach(g => flashError(g));
+    }
+  }
+  if (stepId === 'step-4') {
+    if (data.budget_mode === 'total' && !data.budget_total_amount) {
+      valid = false;
+      setFieldError('field-budget-total', true);
+      setTimeout(() => setFieldError('field-budget-total', false), 2000);
+    }
+  }
+  if (valid) nextStep();
+}
+
+function validateAndSubmit() {
+  const name = document.getElementById('inputName').value.trim();
+  const company = document.getElementById('inputCompany').value.trim();
+  const email = document.getElementById('inputEmail').value.trim();
+  const emailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+  let valid = true;
+
+  if (!name) { setFieldError('field-name', true); valid = false; } else { setFieldError('field-name', false); }
+  if (!company) { setFieldError('field-company', true); valid = false; } else { setFieldError('field-company', false); }
+  if (!emailValid) { setFieldError('field-email', true); valid = false; } else { setFieldError('field-email', false); }
+
+  if (data.submitted_on_behalf) {
+    const sn = document.getElementById('inputSubmitterName').value.trim();
+    const se = document.getElementById('inputSubmitterEmail').value.trim();
+    if (!sn) { setFieldError('field-submitter-name', true); valid = false; } else { setFieldError('field-submitter-name', false); }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(se)) { setFieldError('field-submitter-email', true); valid = false; } else { setFieldError('field-submitter-email', false); }
+    data.submitter_name = sn;
+    data.submitter_email = se;
+  }
+
+  if (!valid) return;
+
+  data.name = name;
+  data.company = company;
+  data.email = email;
+  data.phone = document.getElementById('inputPhone').value.trim() || null;
+  data.notes = document.getElementById('inputNotes').value.trim() || null;
+  data.lead_id = 'GPU-' + Date.now().toString(36).toUpperCase() + '-' + Math.random().toString(36).substring(2, 6).toUpperCase();
+  data.submitted_at = new Date().toISOString();
+
+  // Clean unused fields
+  if (data.product_type === 'inference' || data.product_type === 'model-on-demand') {
+    data.gpu_model = null; data.node_min = null; data.node_max = null; data.gpus_per_node = null; data.special_requirements = null;
+  } else {
+    data.model_name = null; data.scale = null;
+  }
+  if (data.budget_mode === 'rate') { data.budget_total_amount = null; data.budget_total_currency = null; }
+  else if (data.budget_mode === 'total') { data.budget_rate_min = null; data.budget_rate_max = null; }
+  else { data.budget_rate_min = null; data.budget_rate_max = null; data.budget_total_amount = null; data.budget_total_currency = null; }
+  if (!data.submitted_on_behalf) { data.submitter_name = null; data.submitter_email = null; }
+
+  allDeals.push(JSON.parse(JSON.stringify(data)));
+  document.getElementById('leadId').textContent = data.lead_id;
+  document.getElementById('dealCounter').textContent = allDeals.length > 1 ? `${allDeals.length} deals submitted this session` : '';
+  stepHistory.push('success');
+  showStep('success');
+}
+
+function validateContact() {
+  if (document.getElementById('inputName').value.trim()) setFieldError('field-name', false);
+  if (document.getElementById('inputCompany').value.trim()) setFieldError('field-company', false);
+  if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(document.getElementById('inputEmail').value.trim())) setFieldError('field-email', false);
+  if (data.submitted_on_behalf) {
+    if (document.getElementById('inputSubmitterName').value.trim()) setFieldError('field-submitter-name', false);
+    if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(document.getElementById('inputSubmitterEmail').value.trim())) setFieldError('field-submitter-email', false);
+  }
+}
+
+// âââ Selection Handlers ââââââââââââââââââââââââââââââââââââââââââââââ
+function selectOption(el, field) {
+  el.parentElement.querySelectorAll('.option').forEach(o => o.classList.remove('selected'));
+  el.classList.add('selected');
+  data[field] = el.dataset.value;
+
+  const stepEl = el.closest('.step');
+  const btn = stepEl.querySelector('.btn-primary');
+  if (btn) btn.disabled = false;
+
+  if (field === 'model_name') {
+    setTimeout(() => document.getElementById('scaleSub').classList.add('visible'), 100);
+  }
+  if (field === 'product_type' || field === 'timeline') {
+    setTimeout(() => nextStep(), 350);
+  }
+}
+
+function toggleChip(el, field) {
+  el.classList.toggle('selected');
+  const container = el.parentElement;
+  data[field] = Array.from(container.querySelectorAll('.chip.selected')).map(c => c.dataset.value);
+}
+
+// âââ Budget Mode âââââââââââââââââââââââââââââââââââââââââââââââââââââ
+function switchBudgetMode(mode) {
+  data.budget_mode = mode;
+  document.querySelectorAll('.budget-toggle-btn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.budget-panel').forEach(p => p.classList.remove('active'));
+  if (mode === 'rate') { document.getElementById('budgetToggleRate').classList.add('active'); document.getElementById('budgetPanelRate').classList.add('active'); onPriceSlider(); }
+  else if (mode === 'total') { document.getElementById('budgetToggleTotal').classList.add('active'); document.getElementById('budgetPanelTotal').classList.add('active'); }
+  else { document.getElementById('budgetToggleSkip').classList.add('active'); document.getElementById('budgetPanelSkip').classList.add('active'); }
+}
+
+function onBudgetTotalInput() {
+  const amt = document.getElementById('budgetTotalAmount').value;
+  data.budget_total_amount = amt ? parseFloat(amt) : null;
+  data.budget_total_currency = document.getElementById('budgetTotalCurrency').value;
+  if (amt) setFieldError('field-budget-total', false);
+}
+
+// âââ Advanced ââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+function toggleAdvanced() {
+  document.getElementById('advancedToggle').classList.toggle('open');
+  document.getElementById('advancedPanel').classList.toggle('open');
+}
+function skipAdvanced() { data.sla = []; data.networking = []; data.other = []; nextStep(); }
+
+// âââ Submit Another Deal âââââââââââââââââââââââââââââââââââââââââââââ
+function submitAnother() {
+  // Keep contact info for convenience
+  const keepName = data.name;
+  const keepCompany = data.company;
+  const keepEmail = data.email;
+  const keepPhone = data.phone;
+  const keepOnBehalf = data.submitted_on_behalf;
+  const keepSubName = data.submitter_name;
+  const keepSubEmail = data.submitter_email;
+
+  data = freshData();
+  data.name = keepName;
+  data.company = keepCompany;
+  data.email = keepEmail;
+  data.phone = keepPhone;
+  data.submitted_on_behalf = keepOnBehalf;
+  data.submitter_name = keepSubName;
+  data.submitter_email = keepSubEmail;
+
+  // Reset UI
+  document.querySelectorAll('.chip.selected').forEach(c => c.classList.remove('selected'));
+  document.querySelectorAll('.option.selected').forEach(o => o.classList.remove('selected'));
+  document.querySelectorAll('.sub-question.visible').forEach(s => s.classList.remove('visible'));
+  document.getElementById('nodeMin').value = 1;
+  document.getElementById('nodeMax').value = 4;
+  document.getElementById('gpuPerNodeSlider').value = 8;
+  document.getElementById('contractSlider').value = 12;
+  document.getElementById('priceMin').value = 50;
+  document.getElementById('priceMax').value = 80;
+  document.getElementById('inputSpecialReq').value = '';
+  document.getElementById('inputCountry').value = '';
+  document.getElementById('inputNotes').value = '';
+  document.getElementById('extensionToggle').classList.remove('active');
+  document.getElementById('advancedToggle').classList.remove('open');
+  document.getElementById('advancedPanel').classList.remove('open');
+
+  document.querySelectorAll('.btn-primary').forEach(b => b.disabled = true);
+
+  currentStep = 1;
+  stepHistory = [1];
+  showStep(1);
+}
+
+// âââ Download JSON âââââââââââââââââââââââââââââââââââââââââââââââââââ
+function downloadJSON() {
+  const payload = allDeals.length > 1 ? allDeals : allDeals[0];
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = allDeals.length > 1 ? `GPU-DEALS-${Date.now()}.json` : `${data.lead_id}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+// âââ Keyboard Shortcuts ââââââââââââââââââââââââââââââââââââââââââââââ
+document.addEventListener('keydown', (e) => {
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+  const activeStep = document.querySelector('.step.active.visible');
+  if (!activeStep) return;
+  const keyMap = { a: 0, b: 1, c: 2, d: 3, e: 4, f: 5 };
+  const key = e.key.toLowerCase();
+  if (key in keyMap) {
+    const options = activeStep.querySelectorAll('.options .option');
+    if (options[keyMap[key]]) options[keyMap[key]].click();
+  }
+  if (e.key === 'Enter') {
+    const btn = activeStep.querySelector('.btn-primary');
+    if (btn && !btn.disabled) btn.click();
+  }
+});
+
+// âââ Init ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+showStep(1);
+</script>
+</body>
+</html>
